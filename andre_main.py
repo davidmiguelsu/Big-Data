@@ -10,6 +10,15 @@ import pandas as pd
 import seaborn as sns 
 import matplotlib.pyplot as plt
 import math
+from pyspark.ml.feature import ChiSqSelector
+from pyspark.ml.transformer import Transformer
+from pyspark.ml.util import DefaultParams
+
+
+
+#######
+from pyspark.ml.feature import ChiSqSelector
+num_features = 10
 
 # Create Spark Session and Name it
 spark = (
@@ -24,15 +33,12 @@ df = spark.read.option("header", True).csv("input/1992.csv")
 
 print((df.count(), len(df.columns)))
 
-#Drop collumns that we can't use
-df = df.drop("ArrTime", "ActualElapsedTime", "AirTime", "TaxiIn", "Diverted",  "CarrierDelay", "WeatherDelay", "NASDelay",
-             "SecurityDelay", "LateAircraftDelay")
+selected_columns = [col for col in df.columns if col not in ["ArrTime", "ActualElapsedTime", "AirTime", "TaxiIn", "Diverted",  "CarrierDelay", "WeatherDelay", "NASDelay",
+             "SecurityDelay", "LateAircraftDelay"]]
 
 print((df.count(), len(df.columns)))
 
-#THIS DEPENDS ON THE DATASET, WE SHOULD NOT HAVE IT HARDCODED
-#Drop columns that have high correlation with other features or aren't relevant to the problem we are solving or that have more than 50% null values
-df = df.drop("Cancelled", "UniqueCarrier", "CRSDepTime", "CRSElapsedTime","TailNum", "TaxiOut", "CancellationCode", "FlightNum")
+selected_columns = [col for col in selected_columns if col not in ["Cancelled", "UniqueCarrier", "CRSDepTime", "CRSElapsedTime","TailNum", "TaxiOut", "CancellationCode", "FlightNum"]]
 
 #Change datatype of columns - https://www.geeksforgeeks.org/how-to-change-column-type-in-pyspark-dataframe/
 df = df.withColumn("Year",df["Year"].cast(IntegerType())) \
@@ -57,13 +63,6 @@ df = df.withColumn("CRSArrTime", when(pysparkfunc.length("CRSArrTime") == 3,
                         df["CRSArrTime"].substr(1, 2).cast(IntegerType()) * 60 +
                         df["CRSArrTime"].substr(3, 2).cast(IntegerType())))
 
-# drop rows with any null or "NA" value
-# https://stackoverflow.com/questions/54843227/drop-rows-containing-specific-value-in-pyspark-dataframe
-df = df.na.drop()
-expr = ' and '.join('(%s != "NA")' % col_name for col_name in df.columns)
-df.filter(expr)
-
-
 print((df.count(), len(df.columns)))
 df.printSchema()
 
@@ -77,23 +76,48 @@ encoder = OneHotEncoder(inputCols=["Origin_ind"], outputCols=["Origin_enc"])
 encoder1 = OneHotEncoder(inputCols=["Dest_ind"], outputCols=["Dest_enc"])
 encoder2 = OneHotEncoder(inputCols=["DayOfWeek_ind"], outputCols=["DayOfWeek_enc"])
 
-# # create a list of the columns to standardize
-# columns_to_standardize = ["Year", "Month", "DayofMonth", "DepTime", "CRSArrTime", "ArrDelay", "DepDelay", "Distance"]
-# assembler = VectorAssembler(inputCols=columns_to_standardize, outputCol="features")
+# Use VectorAssembler to create a single vector column from the selected columns
+selected_columns = [col for col in selected_columns if col not in ["Origin", "Dest", "DayOfWeek", "Origin_ind", "Dest_ind", "DayOfWeek_ind"]]
 
-# # create a StandardScaler object
-# scaler = StandardScaler(inputCol="features", outputCol="std_col")
+# Define a custom transformer that calls the drop_na function on a DataFrame
+class DropNA(Transformer, HasInputCol, HasOutputCol):
+    # Define the input and output columns
+    inputCol = Param(Params._dummy(), "inputCol", "input column")
+    outputCol = Param(Params._dummy(), "outputCol", "output column")
 
-#pipeline = Pipeline(stages=[indexer, indexer1, indexer2, encoder,encoder1, encoder2, assembler, scaler])
-pipeline = Pipeline(stages=[indexer, indexer1, indexer2, encoder,encoder1, encoder2])
+    # Set the input and output columns
+    def setInputCol(self, value):
+        self._set(inputCol=value)
+    def setOutputCol(self, value):
+        self._set(outputCol=value)
+
+    # Define the transform method
+    def transform(self, dataset):
+        # Select the input column
+        df = dataset.select(col(self.getInputCol()))
+
+        # Drop rows with NA values
+        df = df.na.drop()
+
+        return df
+
+assembler = VectorAssembler(inputCols=selected_columns, outputCol="features")
+
+selector = ChiSqSelector(numTopFeatures=num_features, featuresCol="features", labelCol="ArrDelay", outputCol="selected_features")
+
+pipeline = Pipeline(stages=[indexer, indexer1, indexer2, encoder,encoder1, encoder2, assembler, drop_na,  selector])
 transformed_df = pipeline.fit(df).transform(df)
-df.drop("Origin", "Dest", "DayOfWeek", "Origin_ind", "Dest_ind", "DayOfWeek_ind")
+# Drop the unnecessary columns
+transformed_df = transformed_df.select("selected_features")
+#df.drop("Origin", "Dest", "DayOfWeek", "Origin_ind", "Dest_ind", "DayOfWeek_ind")
 
 print((df.count(), len(df.columns)))
 df.printSchema()
 
 print((transformed_df.count(), len(transformed_df.columns)))
 transformed_df.printSchema()
+
+num_features = 10
 
 
 
