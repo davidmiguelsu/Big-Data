@@ -126,12 +126,8 @@ def data_transformation(df):
 
 def linear_regression(training, test):
     lr = LinearRegression(featuresCol="selectedFeatures", labelCol="ArrDelay")
-    paramGrid = ParamGridBuilder() \
-        .addGrid(lr.regParam, [0.2, 0.4, 0.6, 0.8, 1.0]) \
-        .addGrid(lr.fitIntercept, [True]) \
-        .build()
+    paramGrid = ParamGridBuilder().addGrid(lr.regParam, [0.2, 0.4, 0.6, 0.8, 1.0]).build()
 
-    # Select the best model with 3-folds cross validation
     cv = CrossValidator(estimator=lr,
                         estimatorParamMaps=paramGrid,
                         evaluator=RegressionEvaluator(predictionCol="prediction", labelCol="ArrDelay"),
@@ -147,9 +143,8 @@ def decision_tree(training, test):
     # Train a DecisionTree model.
     dt = DecisionTreeRegressor(featuresCol="selectedFeatures", labelCol="ArrDelay")
 
-    paramGrid = ParamGridBuilder() \
-    .build()
-    # Select the best model with 3-folds cross validation
+    paramGrid = ParamGridBuilder().build()
+
     cv = CrossValidator(estimator=dt,
                         estimatorParamMaps=paramGrid,
                         evaluator=RegressionEvaluator(predictionCol="prediction", labelCol="ArrDelay"),
@@ -162,7 +157,6 @@ def decision_tree(training, test):
     
 
 def data_evaluation(model_output):
-    # Transform output into RDD and compute metrics
     output_rdd = model_output.rdd.map(
         lambda x: (float(x[0]), float(x[1]))
     )
@@ -207,10 +201,9 @@ if __name__ == '__main__':
     if (ml_algorithm != 1 and ml_algorithm!= 2):
         print("\n\nAlgorithms must be: \n\n1- Linear Regression\n\n or \n\n2- Decision Tree\n\n")
         sys.exit(-1)
-    
+
     # Read the data
     df = spark.read.option("header", True).csv(path)
-    #print((df.count(), len(df.columns)))
 
     df = data_cleaning(df)
     df = data_preparation(df)
@@ -231,6 +224,7 @@ if __name__ == '__main__':
         model = decision_tree(training, test)
     
     data_evaluation(model)
+    spark.stop()
     
 
 
