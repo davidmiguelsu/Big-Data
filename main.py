@@ -14,11 +14,12 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 import pandas as pd
 from pyspark.ml.feature import StandardScaler
+from pyspark.ml.regression import DecisionTreeRegressor
+from pyspark.ml.evaluation import RegressionEvaluator
+import os
 
 def remove_null(df):
-    # drop rows with any null or "NA" value
     # https://stackoverflow.com/questions/54843227/drop-rows-containing-specific-value-in-pyspark-dataframe
-    # Remove rows with missing values
     df = df.na.drop()
     expr = ' and '.join('(%s != "NA")' % col_name for col_name in df.columns)
     df.filter(expr)
@@ -57,20 +58,11 @@ def data_cleaning(df):
     df = df.drop("ArrTime", "ActualElapsedTime", "AirTime", "TaxiIn", "Diverted",  "CarrierDelay", "WeatherDelay", "NASDelay",
              "SecurityDelay", "LateAircraftDelay")
     
-    print((df.count(), len(df.columns)))
-
-    #THIS DEPENDS ON THE DATASET, WE SHOULD NOT HAVE IT HARDCODED
     #Drop columns that have high correlation with other features or aren't relevant to the problem we are solving or that have more than 50% null values
     df = df.drop("Cancelled", "UniqueCarrier", "CRSDepTime", "CRSElapsedTime","TailNum", "TaxiOut", "CancellationCode", "FlightNum")
 
     df = remove_null(df)
-
-    print((df.count(), len(df.columns)))
-    df.printSchema()
-
-    print("Fim do data cleaning!")
-    df.show()
-    df.printSchema()
+    
     return df
 
 def data_preparation(df):
@@ -80,27 +72,26 @@ def data_preparation(df):
         .withColumn("DayofMonth",df["DayofMonth"].cast(IntegerType())) \
         .withColumn("ArrDelay",df["ArrDelay"].cast(IntegerType())) \
         .withColumn("DepDelay",df["DepDelay"].cast(IntegerType())) \
-        .withColumn("Distance",df["Distance"].cast(IntegerType())) 
+        .withColumn("Distance",df["Distance"].cast(IntegerType())) \
+        .withColumn("DepTime",df["DepTime"].cast(IntegerType())) \
+        .withColumn("CRSArrTime",df["CRSArrTime"].cast(IntegerType())) 
 
     # Convert the 2 last variables from HHMM to minutes
     # https://sparkbyexamples.com/pyspark/pyspark-timestamp-difference-seconds-minutes-hours/
     df = df.withColumn("DepTime", when(pysparkfunc.length("DepTime") == 3, 
-                            df["DepTime"].substr(1, 1).cast(IntegerType()) * 60 +
-                            df["DepTime"].substr(2, 2).cast(IntegerType()))
+                            df["DepTime"].substr(1, 1) * 60 +
+                            df["DepTime"].substr(2, 2) ) 
                     .when(pysparkfunc.length("DepTime") == 4, 
-                            df["DepTime"].substr(1, 2).cast(IntegerType()) * 60 +
-                            df["DepTime"].substr(3, 2).cast(IntegerType()))) 
+                            df["DepTime"].substr(1, 2) * 60 +
+                            df["DepTime"].substr(3, 2)) )
     df = df.withColumn("CRSArrTime", when(pysparkfunc.length("CRSArrTime") == 3,
-                            df["CRSArrTime"].substr(1, 1).cast(IntegerType()) * 60 +
-                            df["CRSArrTime"].substr(2, 2).cast(IntegerType()))
+                            df["CRSArrTime"].substr(1, 1) * 60 +
+                            df["CRSArrTime"].substr(2, 2))
                         .when(pysparkfunc.length("CRSArrTime") == 4,
-                            df["CRSArrTime"].substr(1, 2).cast(IntegerType()) * 60 +
-                            df["CRSArrTime"].substr(3, 2).cast(IntegerType())))
-
-    print("FIM da data preparation!")
-    df.show()
-    df.printSchema()
+                            df["CRSArrTime"].substr(1, 2) * 60 +
+                            df["CRSArrTime"].substr(3, 2)))                
     return df
+
 
 def data_transformation(df):
     stages = []
@@ -111,7 +102,6 @@ def data_transformation(df):
 
     columns = [c for c in df.columns if c not in ["Origin", "Dest", "DayOfWeek"]]
 
-    # Create a VectorAssembler to combine the features into a single vector column
     stages.append(VectorAssembler(inputCols=columns, outputCol="features"))
 
     stages.append(StandardScaler(inputCol="features",
@@ -128,10 +118,11 @@ def data_transformation(df):
     df = pipeline.fit(df).transform(df)
     df = df.select(['selectedFeatures', "ArrDelay"])
 
-    print("Fim do data preparation!")
+    print("Final DATASET!")
     df.show()
     df.printSchema()
     return df
+
 
 def linear_regression(training, test):
     lr = LinearRegression(featuresCol="selectedFeatures", labelCol="ArrDelay")
@@ -149,10 +140,30 @@ def linear_regression(training, test):
     
     model = cv.fit(training)
 
-    print("TEST")
-    output = model.transform(test).select("prediction", "ArrDelay")
+    return model.transform(test).select("prediction", "ArrDelay")
+
+
+def decision_tree(training, test):
+    # Train a DecisionTree model.
+    dt = DecisionTreeRegressor(featuresCol="selectedFeatures", labelCol="ArrDelay")
+
+    paramGrid = ParamGridBuilder() \
+    .build()
+    # Select the best model with 3-folds cross validation
+    cv = CrossValidator(estimator=dt,
+                        estimatorParamMaps=paramGrid,
+                        evaluator=RegressionEvaluator(predictionCol="prediction", labelCol="ArrDelay"),
+                        numFolds=5)
+
+    
+    model = cv.fit(training)
+    
+    return model.transform(test).select("prediction", "ArrDelay")
+    
+
+def data_evaluation(model_output):
     # Transform output into RDD and compute metrics
-    output_rdd = output.rdd.map(
+    output_rdd = model_output.rdd.map(
         lambda x: (float(x[0]), float(x[1]))
     )
     metrics = RegressionMetrics(output_rdd)
@@ -160,8 +171,8 @@ def linear_regression(training, test):
           "|Mean Absolute Error = " + str(metrics.meanAbsoluteError) + "|\n"
           "|Mean Squared Error = " + str(metrics.meanSquaredError) + "|\n"
           "|Root Mean Squared Error = "  + str(metrics.rootMeanSquaredError) + "|\n"
-          "|R2 =" + str(metrics.r2) + "|" )
-    
+          "|R2 =" + str(metrics.r2) + "|" )   
+
 
 if __name__ == '__main__': 
     # Create Spark Session and Name it
@@ -171,10 +182,35 @@ if __name__ == '__main__':
         .appName('Big_Data_Project')
         .getOrCreate()
     )
+    #Help user
+    if len(sys.argv) == 2:
+        path = sys.argv[1]
+        if path == "-h" or path == "help":
+            print("\n\nProgram needs 3 arguments as follows: \n\npython main.py path_to_dataset ml_algorithm_number \n")
+            print("Algorithms must be: \n\n1- Linear Regression\n\n or \n\n2- Decision Tree\n\n")
+        sys.exit(-1)
 
+    #verify if the number of arguments
+    if len(sys.argv) != 3:
+        print("\n\nProgram needs 3 arguments as follows: \n\npython main.py path_to_dataset ml_algorithm_number \n\n")
+        sys.exit(-1)
+
+    app_path = sys.argv[0]
+    path = sys.argv[1]
+    ml_algorithm = int(sys.argv[2])
+
+    if not os.path.exists(path):
+        print("Wrong dataset path!")
+        sys.exit(-1)
+
+    #verify the number of the algorithm 
+    if (ml_algorithm != 1 and ml_algorithm!= 2):
+        print("\n\nAlgorithms must be: \n\n1- Linear Regression\n\n or \n\n2- Decision Tree\n\n")
+        sys.exit(-1)
+    
     # Read the data
-    df = spark.read.option("header", True).csv("input/1992.csv")
-    print((df.count(), len(df.columns)))
+    df = spark.read.option("header", True).csv(path)
+    #print((df.count(), len(df.columns)))
 
     df = data_cleaning(df)
     df = data_preparation(df)
@@ -182,10 +218,20 @@ if __name__ == '__main__':
 
     # Create training and test sets for the models
     training, test= df.randomSplit([0.70, 0.30], 100)
-    print("Rows in training set: " + str(training.count()))
-    print("Rows in test set: " + str(test.count()))
+    print("Training set size: " + str(training.count()))
+    print("Testing set size: " + str(test.count()))
     
-    linear_regression(training, test)
+    #data_modeling
+    if ml_algorithm == 1:
+        print("Using linear regression!")
+        model = linear_regression(training, test)
+
+    if ml_algorithm == 2:
+        print("Using decision tree!")
+        model = decision_tree(training, test)
+    
+    data_evaluation(model)
+    
 
 
     
