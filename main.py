@@ -95,27 +95,35 @@ def data_preparation(df):
 
 def data_transformation(df):
     stages = []
+
+    #Map the string columns to a column of label indices
     stages.append(StringIndexer(inputCol="Origin", outputCol="Origin_ind"))
     stages.append(StringIndexer(inputCol="Dest", outputCol="Dest_ind"))
     stages.append(StringIndexer(inputCol="DayOfWeek", outputCol="DayOfWeek_ind"))
     df = remove_null(df)
 
+    #Remove the string columns
     columns = [c for c in df.columns if c not in ["Origin", "Dest", "DayOfWeek"]]
 
+    #Merge the columns into a single vector column
     stages.append(VectorAssembler(inputCols=columns, outputCol="features"))
 
+    #Standardizes feature vector by removing the mean 
     stages.append(StandardScaler(inputCol="features",
                         outputCol="scaledFeatures",
                         withStd=True,
                         withMean=False))
 
+    #Feature selector based on univariate statistical tests against labels --> F-value (f_regression)
     selector = UnivariateFeatureSelector(featuresCol="scaledFeatures", outputCol="selectedFeatures",
                                      labelCol="ArrDelay", selectionMode="numTopFeatures")
     selector.setFeatureType("continuous").setLabelType("continuous").setSelectionThreshold(5)
     stages.append(selector)
 
+    #Pipeline it
     pipeline = Pipeline(stages=stages)
     df = pipeline.fit(df).transform(df)
+    #Get the dataset with the features selected in a single column vector and the target column
     df = df.select(['selectedFeatures', "ArrDelay"])
 
     print("Final DATASET!")
@@ -125,9 +133,11 @@ def data_transformation(df):
 
 
 def linear_regression(training, test):
+    # Train a LinearRegression model
     lr = LinearRegression(featuresCol="selectedFeatures", labelCol="ArrDelay")
     paramGrid = ParamGridBuilder().addGrid(lr.regParam, [0.2, 0.4, 0.6, 0.8, 1.0]).build()
 
+    #cross validation
     cv = CrossValidator(estimator=lr,
                         estimatorParamMaps=paramGrid,
                         evaluator=RegressionEvaluator(predictionCol="prediction", labelCol="ArrDelay"),
@@ -140,11 +150,12 @@ def linear_regression(training, test):
 
 
 def decision_tree(training, test):
-    # Train a DecisionTree model.
+    # Train a DecisionTree model
     dt = DecisionTreeRegressor(featuresCol="selectedFeatures", labelCol="ArrDelay")
 
     paramGrid = ParamGridBuilder().build()
 
+    #cross validation
     cv = CrossValidator(estimator=dt,
                         estimatorParamMaps=paramGrid,
                         evaluator=RegressionEvaluator(predictionCol="prediction", labelCol="ArrDelay"),
@@ -157,9 +168,12 @@ def decision_tree(training, test):
     
 
 def data_evaluation(model_output):
+    #Return a new RDD by applying a function to each element of this RDD
     output_rdd = model_output.rdd.map(
         lambda x: (float(x[0]), float(x[1]))
     )
+
+    #Apply regression metrics for this regression problem
     metrics = RegressionMetrics(output_rdd)
     print("|Explained Variance = " + str(metrics.explainedVariance) + "|\n"
           "|Mean Absolute Error = " + str(metrics.meanAbsoluteError) + "|\n"
