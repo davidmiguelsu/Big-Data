@@ -17,6 +17,7 @@ from pyspark.ml.regression import LinearRegression, RandomForestRegressor
 from pyspark.ml.tuning import ParamGridBuilder, CrossValidator
 from pyspark.ml.evaluation import RegressionEvaluator
 from pyspark.mllib.evaluation import RegressionMetrics
+from pyspark.ml.feature import StandardScaler
 
 # Create Spark Session and Name it
 spark = (
