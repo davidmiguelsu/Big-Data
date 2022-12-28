@@ -1,5 +1,5 @@
 # Big-Data
-repo for the big data course (UPM)
+Repo for the Big Data Course (Universidad Politecnica de Madrid)
 
 The objective was to develop a Spark app that could analyze Flight Data and predict the arrival delay of commercial flights.
 
