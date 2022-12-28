@@ -1,5 +1,6 @@
 # Big-Data
 repo for the big data course (UPM)
 
+The objective was to develop a Spark app that could analyze Flight Data and predict the arrival delay of commercial flights.
 
-Remember to try to use UniqueCarrier to analyze the most reliable carriers too (for example)
+We developed our solution using pyspark.
